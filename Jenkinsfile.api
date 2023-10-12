@@ -1,0 +1,116 @@
+import groovy.json.JsonOutput
+
+def COLOR_MAP = [
+    'SUCCESS': 'good',
+    'ALERT': 'warning',
+    'FAILURE': 'danger'
+    ]
+    
+def getBuildUser(){
+    return currentBuild.rawBuild.getCause(Cause.UserIdCause).getUserId()
+}
+
+pipeline {
+    agent any
+    environment {
+    ACCOUNT_ID = '422927610118'
+    BUILD_USER = ''
+    
+    }
+    parameters {
+        gitParameter branchFilter: 'origin/(.*)', defaultValue: 'main', name: 'BRANCH', type: 'PT_BRANCH'
+    }
+    stages {
+        // stage('slack') {
+        //     steps {
+        //         script{
+        //           BUILD_USER = getBuildUser()
+        //         }
+        //         slackSend channel: 'channel_name',
+        //                 color: 'warning',
+        //               message: 'IQboard Api Build Initiated'
+        //     }
+        // }
+        stage('Initialise'){
+            steps{
+                git branch: "${params.BRANCH}", credentialsId: 'kissps-checkout-middleware', url: 'git@github.com:MemorresR/kissps-checkout-middleware.git'
+            }
+        }
+        stage('Build'){
+            steps{
+                input(message: 'Do you want to build the image?', ok: 'Build Image')
+                script{
+                    //delete old .pem files
+                    // sh 'rm -rf *.pem'
+                    //create 'pem' files
+                    sh '''
+                    aws secretsmanager get-secret-value --secret-id /kissps-ck/stg/jwt-private --query SecretString --output text > jwt-private.pem
+                    '''
+                    sh '''
+                    aws secretsmanager get-secret-value --secret-id /kissps-ck/stg/jwt-public --query SecretString --output text > jwt-public.pem
+                    '''
+                    //create 'firebase-adminsdk.json' files
+                    // sh '''
+                    // aws secretsmanager get-secret-value --secret-id /kissps-ck/stg/firebase-adminsdk --query SecretString --output text --region ap-southeast-2 > firebase-adminsdk.json
+                    // '''
+                    //env from secrets manager
+                    sh '''
+                    aws secretsmanager get-secret-value --secret-id /kissps-ck/stg/env --query SecretString --output text --region ap-southeast-2 | jq -r 'to_entries|map("\\(.key)=\\(.value)")|.[]' > .env
+                    '''
+                    //Build image
+                    sh '''
+                    cd /var/lib/jenkins/workspace/$JOB_NAME
+                    docker build -t kissps-ck-middleware-stg:$BUILD_NUMBER .
+                    '''
+                }
+            }
+        }
+        stage('Publish') {
+            steps {
+                input(message: 'Do you want to Publish the image to ECR?', ok: 'Publish image')
+                script {
+                //Login to AWS ECR
+                sh 'aws ecr get-login-password --region ap-southeast-2 | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com'
+                //Push image to ECR
+                sh 'docker tag kissps-ck-middleware-stg:$BUILD_NUMBER $ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com/kissps-ck-middleware-stg:$BUILD_NUMBER'
+                sh 'docker push $ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com/kissps-ck-middleware-stg:$BUILD_NUMBER'
+                }
+            }
+        }
+        stage('Create revision') {
+            steps{
+                input(message: 'Do you want to deploy the image?', ok: 'Deploy')
+                //create revision
+                script {
+                    sh '''
+                        cluster="cluster-stg"
+                        service_name="-stg"
+                        TASK="kissps-ck-middleware-stg"
+                        ECR_IMAGE="$ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com/kissps-ck-middleware-stg:$BUILD_NUMBER"
+                    
+                        TASK_DEFINITION=$(aws ecs describe-task-definition  --task-definition kissps-ck-middleware-stg --region ap-southeast-2 --output json)
+                        updated_task_definition=$(echo $TASK_DEFINITION | jq --arg IMAGE "$ECR_IMAGE" '.taskDefinition | .containerDefinitions[0].image = $IMAGE | del(.taskDefinitionArn) | del(.revision) | del(.status) | del(.requiresAttributes) | del(.compatibilities) | del(.registeredAt) | del(.registeredBy)')
+                    
+                        task_revision=$(aws ecs register-task-definition --region ap-southeast-2 --cli-input-json "$updated_task_definition")
+                        task_revision_data=$(echo $task_revision | jq '.taskDefinition.revision')
+                    
+                        NEW_SERVICE=$(aws ecs update-service --cluster $cluster --service $service_name --task-definition $TASK --force-new-deployment)
+                        echo "${TASK}, Revision: ${task_revision_data}"
+                        
+                        aws ecs wait services-stable --cluster $cluster --services $service_name
+                    '''
+                }
+            }
+        }
+    }
+    // post{
+    //     always{
+    //         script{
+    //             BUILD_USER = getBuildUser()
+    //             }
+    //         slackSend channel: 'channel_name',
+    //                   color: COLOR_MAP[currentBuild.currentResult],
+    //                   message: "*${currentBuild.currentResult}:* kissps-ck-middleware Build ${env.BUILD_NUMBER} By ${BUILD_USER}"
+    //     }
+    // }
+}
