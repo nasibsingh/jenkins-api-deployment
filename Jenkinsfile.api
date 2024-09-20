@@ -13,7 +13,7 @@ def getBuildUser(){
 pipeline {
     agent any
     environment {
-    ACCOUNT_ID = '422927610118'
+    ACCOUNT_ID = ''
     BUILD_USER = ''
     
     }
@@ -28,12 +28,12 @@ pipeline {
         //         }
         //         slackSend channel: 'channel_name',
         //                 color: 'warning',
-        //               message: 'IQboard Api Build Initiated'
+        //               message: 'Project_name Api Build Initiated'
         //     }
         // }
         stage('Initialise'){
             steps{
-                git branch: "${params.BRANCH}", credentialsId: 'kissps-checkout-middleware', url: 'git@github.com:MemorresR/kissps-checkout-middleware.git'
+                git branch: "${params.BRANCH}", credentialsId: 'credential_name', url: ''
             }
         }
         stage('Build'){
@@ -44,23 +44,23 @@ pipeline {
                     // sh 'rm -rf *.pem'
                     //create 'pem' files
                     sh '''
-                    aws secretsmanager get-secret-value --secret-id /kissps-ck/stg/jwt-private --query SecretString --output text > jwt-private.pem
+                    aws secretsmanager get-secret-value --secret-id /project_name/environment/jwt-private --query SecretString --output text > jwt-private.pem
                     '''
                     sh '''
-                    aws secretsmanager get-secret-value --secret-id /kissps-ck/stg/jwt-public --query SecretString --output text > jwt-public.pem
+                    aws secretsmanager get-secret-value --secret-id /project_name/environment/jwt-public --query SecretString --output text > jwt-public.pem
                     '''
                     //create 'firebase-adminsdk.json' files
                     // sh '''
-                    // aws secretsmanager get-secret-value --secret-id /kissps-ck/stg/firebase-adminsdk --query SecretString --output text --region ap-southeast-2 > firebase-adminsdk.json
+                    // aws secretsmanager get-secret-value --secret-id /project_name/environment/firebase-adminsdk --query SecretString --output text --region region > firebase-adminsdk.json
                     // '''
                     //env from secrets manager
                     sh '''
-                    aws secretsmanager get-secret-value --secret-id /kissps-ck/stg/env --query SecretString --output text --region ap-southeast-2 | jq -r 'to_entries|map("\\(.key)=\\(.value)")|.[]' > .env
+                    aws secretsmanager get-secret-value --secret-id project_name/environment/env --query SecretString --output text --region region | jq -r 'to_entries|map("\\(.key)=\\(.value)")|.[]' > .env
                     '''
                     //Build image
                     sh '''
                     cd /var/lib/jenkins/workspace/$JOB_NAME
-                    docker build -t kissps-ck-middleware-stg:$BUILD_NUMBER .
+                    docker build -t project-name-environment:$BUILD_NUMBER .
                     '''
                 }
             }
@@ -70,10 +70,10 @@ pipeline {
                 input(message: 'Do you want to Publish the image to ECR?', ok: 'Publish image')
                 script {
                 //Login to AWS ECR
-                sh 'aws ecr get-login-password --region ap-southeast-2 | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com'
+                sh 'aws ecr get-login-password --region ap-southeast-2 | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.region.amazonaws.com'
                 //Push image to ECR
-                sh 'docker tag kissps-ck-middleware-stg:$BUILD_NUMBER $ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com/kissps-ck-middleware-stg:$BUILD_NUMBER'
-                sh 'docker push $ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com/kissps-ck-middleware-stg:$BUILD_NUMBER'
+                sh 'docker tag project-name-environment:$BUILD_NUMBER $ACCOUNT_ID.dkr.ecr.region.amazonaws.com/project-name-environment:$BUILD_NUMBER'
+                sh 'docker push $ACCOUNT_ID.dkr.ecr.region.amazonaws.com/project-name-environment:$BUILD_NUMBER'
                 }
             }
         }
@@ -83,15 +83,15 @@ pipeline {
                 //create revision
                 script {
                     sh '''
-                        cluster="cluster-stg"
-                        service_name="-stg"
-                        TASK="kissps-ck-middleware-stg"
-                        ECR_IMAGE="$ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com/kissps-ck-middleware-stg:$BUILD_NUMBER"
+                        cluster="cluster-name"
+                        service_name="service-name"
+                        TASK="task-definition-name"
+                        ECR_IMAGE="$ACCOUNT_ID.dkr.ecr.region.amazonaws.com/project-name-environment:$BUILD_NUMBER"
                     
-                        TASK_DEFINITION=$(aws ecs describe-task-definition  --task-definition kissps-ck-middleware-stg --region ap-southeast-2 --output json)
+                        TASK_DEFINITION=$(aws ecs describe-task-definition  --task-definition project-name-environment --region region --output json)
                         updated_task_definition=$(echo $TASK_DEFINITION | jq --arg IMAGE "$ECR_IMAGE" '.taskDefinition | .containerDefinitions[0].image = $IMAGE | del(.taskDefinitionArn) | del(.revision) | del(.status) | del(.requiresAttributes) | del(.compatibilities) | del(.registeredAt) | del(.registeredBy)')
                     
-                        task_revision=$(aws ecs register-task-definition --region ap-southeast-2 --cli-input-json "$updated_task_definition")
+                        task_revision=$(aws ecs register-task-definition --region region --cli-input-json "$updated_task_definition")
                         task_revision_data=$(echo $task_revision | jq '.taskDefinition.revision')
                     
                         NEW_SERVICE=$(aws ecs update-service --cluster $cluster --service $service_name --task-definition $TASK --force-new-deployment)
@@ -110,7 +110,7 @@ pipeline {
     //             }
     //         slackSend channel: 'channel_name',
     //                   color: COLOR_MAP[currentBuild.currentResult],
-    //                   message: "*${currentBuild.currentResult}:* kissps-ck-middleware Build ${env.BUILD_NUMBER} By ${BUILD_USER}"
+    //                   message: "*${currentBuild.currentResult}:* Project_name Environment Build ${env.BUILD_NUMBER} By ${BUILD_USER}"
     //     }
     // }
 }
